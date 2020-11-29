@@ -1558,7 +1558,7 @@ checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
 
 [[package]]
 name = "unipager"
-version = "2.0.0-alpha"
+version = "2.0.1-alpha"
 dependencies = [
  "async-std",
  "bytes",
