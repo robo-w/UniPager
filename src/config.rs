@@ -145,6 +145,7 @@ pub struct MasterConfig {
     pub call: String,
     pub auth: String,
     pub fallback: Vec<(String, u16)>,
+    pub reconnect_timeout: u64,
 }
 
 impl Default for MasterConfig {
@@ -155,6 +156,7 @@ impl Default for MasterConfig {
             call: String::from(""),
             auth: String::from(""),
             fallback: default_fallback_servers(),
+            reconnect_timeout: 30,
         }
     }
 }
