@@ -76,7 +76,7 @@ impl Model {
                 => Some(0x20200000),
             &Model::V2B => Some(0x3F200000),
             &Model::V3B | &Model::V3Bplus => Some(0x3F200000),
-            &Model::V4B | &Model::Pi400 => Some(0x3F200000),
+            &Model::V4B | &Model::Pi400 => Some(0xFE200000),
             &Model::Zero | &Model::ZeroW => Some(0x20200000),
             &Model::OrangePi => None,
             &Model::Unknown => None
