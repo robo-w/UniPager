@@ -76,7 +76,9 @@ impl Scheduler {
             }
 
             if self.config.master.standalone_mode {
-                debug!("Sending message in standalone mode without synchronization of time slots.");
+                info!(
+                    "Sending {} message(s) in standalone mode without synchronization of time slots.",
+                    self.queue.len());
             } else {
                 info!("Queue not empty, waiting for next Timeslot. {} message(s) waiting.", self.queue.len());
                 self.wait_for_next_timeslot();
