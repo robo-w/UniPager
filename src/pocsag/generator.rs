@@ -1,9 +1,10 @@
 use crate::message::{MessageProvider, ProtocolMessage};
-use crate::pocsag::{Encoding, Message, MessageType, encoding};
+use crate::pocsag::{Encoding, encoding, Message, MessageType};
 
 /// Preamble length in number of 32-bit codewords
 pub const PREAMBLE_LENGTH: u8 = 18;
 
+const PREAMBLE_WORD: u32 = 0xAAAAAAAA;
 const SYNC_WORD: u32 = 0x7CD215D8;
 const IDLE_WORD: u32 = 0x7A89C197;
 
@@ -12,7 +13,7 @@ enum State {
     Preamble,
     AddressWord,
     MessageWord(usize, Encoding),
-    Completed
+    Completed,
 }
 
 /// POCSAG Generator
@@ -28,19 +29,19 @@ pub struct Generator<'a> {
     // Number of codewords left in current batch
     codewords: u8,
     // Number of codewords generated
-    count: usize
+    count: usize,
 }
 
 impl<'a> Generator<'a> {
     /// Create a new Generator
     pub fn new(messages: &'a mut dyn MessageProvider, first_msg: Message)
-        -> Generator<'a> {
+               -> Generator<'a> {
         Generator {
             state: State::Preamble,
             messages,
             message: Some(first_msg),
             codewords: PREAMBLE_LENGTH,
-            count: 0
+            count: 0,
         }
     }
 
@@ -86,33 +87,37 @@ impl<'a> Iterator for Generator<'a> {
     type Item = u32;
 
     fn next(&mut self) -> Option<u32> {
-        trace!("Next generated codeword: ({}, {:?})", self.codewords, self.state);
+        trace!(
+            "Generating next 32 bit codeword for state: codewords_left={}, state={:?}, codewords_generated={}",
+            self.codewords,
+            self.state,
+            self.count);
         self.count += 1;
 
         match (self.codewords, self.state)
         {
-            // Stop if no codewords are left and everything is completed.
-            (0, State::Completed) => None,
+            (0, State::Completed) => {
+                trace!("  Generator completed and no codewords left. Stopping generator.");
+                None
+            }
 
-            // The preamble is completed.
-            // Send the sync word and start a new batch with 16 codewords.
             (0, State::Preamble) => {
+                trace!("  Preamble completed. Sending SYNC word and starting new batch of 16 codewords.");
                 self.codewords = 16;
                 self.state = State::AddressWord;
                 Some(SYNC_WORD)
             }
 
-            // No codewords left in the current batch.
-            // Send the sync word and start a new batch with 16 codewords.
             (0, _) => {
+                trace!("  No codewords left in current batch. Sending SYNC word and starting a new batch with 16 codewords.");
                 self.codewords = 16;
                 Some(SYNC_WORD)
             }
 
-            // There are still preamble codewords left to send.
             (_, State::Preamble) => {
+                trace!("  Sending PREAMBLE codeword. Preamble codewords left: {}", self.codewords);
                 self.codewords -= 1;
-                Some(0xAAAAAAAA)
+                Some(PREAMBLE_WORD)
             }
 
             // Send the address word for the current message
@@ -122,6 +127,11 @@ impl<'a> Iterator for Generator<'a> {
 
                 let &Message { ric, func, mtype, .. } =
                     self.message.as_ref().unwrap();
+                trace!(
+                    "  Sending ADDRESS word for current message: RIC=0x{:X}, function=0x{:X}, message_type={:?}",
+                    ric,
+                    func,
+                    mtype);
 
                 self.codewords -= 1;
 
@@ -130,9 +140,10 @@ impl<'a> Iterator for Generator<'a> {
                 if ((ric & 0b111) << 1) as u8 == 16 - codeword {
                     // Set the next state according to the message type
                     self.state = if length == 0 {
+                        trace!("  Empty length. Calculating state based on next message.");
                         self.next_message()
-                    }
-                    else {
+                    } else {
+                        trace!("  Message with length > 0. Calculating state based on message type.");
                         match mtype
                         {
                             MessageType::Numeric => {
@@ -147,15 +158,21 @@ impl<'a> Iterator for Generator<'a> {
                     // Encode the address word.
                     let addr = (ric & 0x001ffff8) << 10;
                     let func = (func as u32 & 0b11) << 11;
-                    Some(parity(crc(addr | func)))
-                }
-                else {
+                    let address_word = parity(crc(addr | func));
+                    trace!(
+                        "  Writing address word for current message. raw: 0x{:X}, with CRC and parity: 0x{:X}",
+                        addr | func,
+                        address_word);
+                    Some(address_word)
+                } else {
+                    trace!("  Position does not match. Sending IDLE word.");
                     Some(IDLE_WORD)
                 }
             }
 
             // Send the next message word of the current message.
             (_, State::MessageWord(pos, encoding)) => {
+                trace!("  Sending MESSAGE codeword. Codewords left: {}", self.codewords);
                 self.codewords -= 1;
                 let mut pos = pos;
                 let mut codeword: u32 = 0;
@@ -178,13 +195,12 @@ impl<'a> Iterator for Generator<'a> {
 
                         pos += 1;
 
-                        // If all bits are send, continue with the next symbol.
+                        // If all bits are sent, continue with the next symbol.
                         if pos % encoding.bits == 0 {
                             sym = bytes.next().map(encoding.encode).unwrap_or(
                                 encoding.trailing
                             );
-                        }
-                        else {
+                        } else {
                             sym >>= 1;
                         }
                     }
@@ -197,18 +213,19 @@ impl<'a> Iterator for Generator<'a> {
                 // completed.
                 self.state = if completed {
                     self.next_message()
-                }
-                else {
+                } else {
                     State::MessageWord(pos, encoding)
                 };
 
                 // TODO: ensure that an trailing IDLE, SYNC or ADDR word is sent
 
-                Some(parity(crc(0x80000000 | (codeword << 11))))
+                let message_word = parity(crc(0x80000000 | (codeword << 11)));
+                trace!("  Writing message codeword. raw: 0x{:X}, with CRC and parity: {:X}", codeword, message_word);
+                Some(message_word)
             }
 
-            // Everything is done. Send idle words until the batch is complete.
             (_, State::Completed) => {
+                trace!("  Sending IDLE codewords to fill remaining batch until complete. Codewords left: {}", self.codewords);
                 self.codewords -= 1;
                 Some(IDLE_WORD)
             }
